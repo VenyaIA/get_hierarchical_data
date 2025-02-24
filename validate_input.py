@@ -1,4 +1,7 @@
 def input_validator(conn, id_employee):
+    """
+    Выполняет проверку, есть ли сотрудник с таким id в базе данных
+    """
     with conn.cursor() as cursor:
         cursor.execute('''
         select id 

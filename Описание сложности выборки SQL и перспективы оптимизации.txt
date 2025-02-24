@@ -1,0 +1,119 @@
+1. Сложность выборки запроса при помощи команды explain analyze из файла get_office_by_employee.sql,
+где мы находим id и name офиса, с примером когда id сотрудника равно 3:
+
+with recursive employee_to_office as (
+  select
+    employee.*
+  from
+	organization_structure employee
+  where
+	employee.id = 3
+  union all
+  select
+	parent.*
+  from
+	organization_structure parent
+	, employee_to_office eto
+  where
+	eto.parent_id = parent.id
+)
+select
+  id, name
+from
+  employee_to_office
+where
+  type = 1
+
+QUERY PLAN:
+"CTE Scan on employee_to_office  (cost=269.82..272.09 rows=1 width=36) (actual time=0.056..0.064 rows=1 loops=1)"
+"  Filter: (type = 1)"
+"  Rows Removed by Filter: 2"
+"  CTE employee_to_office"
+"    ->  Recursive Union  (cost=0.15..269.82 rows=101 width=44) (actual time=0.018..0.060 rows=3 loops=1)"
+"          ->  Index Scan using organization_structure_pkey on organization_structure employee
+                   (cost=0.15..8.17 rows=1 width=44) (actual time=0.017..0.018 rows=1 loops=1)"
+"                Index Cond: (id = 3)"
+"          ->  Hash Join  (cost=0.33..25.96 rows=10 width=44) (actual time=0.008..0.010 rows=1 loops=3)"
+"                Hash Cond: (parent.id = eto.parent_id)"
+"                ->  Seq Scan on organization_structure parent  (cost=0.00..21.30 rows=1130 width=44)
+                        (actual time=0.004..0.005 rows=19 loops=2)"
+"                ->  Hash  (cost=0.20..0.20 rows=10 width=4) (actual time=0.002..0.002 rows=1 loops=3)"
+"                      Buckets: 1024  Batches: 1  Memory Usage: 9kB"
+"                      ->  WorkTable Scan on employee_to_office eto
+                               (cost=0.00..0.20 rows=10 width=4) (actual time=0.000..0.000 rows=1 loops=3)"
+"Planning Time: 0.163 ms"
+"Execution Time: 0.103 ms"
+
+На начальном шаге рекурсии используется индексное сканирование по primary key,
+На каждом шаге рекурсии происходит объединение данных с помощью Hash Join.
+
+Перспективы оптимизации:
+При увеличении объема данных сложность может вырасти.
+Можно создать частичный индекс по столбцу type = 3 при помощи предиката,
+чтобы на начальном шаге рекурсии искать сразу только сотрудников:
+create index idx_organization_structure_type on organization_structure(type)
+where type = 3;
+И на начальном уровне рекурсии перед union all добавить в where type = 3:
+select
+  employee.*
+from
+  organization_structure employee
+where
+  type = 3
+  and employee.id = 3
+
+
+2. Сложность выборки запроса при помощи команды explain analyze из файла get_employees_by_office.sql,
+где мы находим всех сотрудников по id офиса, c примером когда id офиса равно 1:
+
+with recursive office_employees as (
+  select
+	parent.*
+  from
+	organization_structure parent
+  where
+	parent.id = 1
+  union all
+  select
+	employee.*
+  from
+	organization_structure employee
+	, office_employees oe
+  where
+	  oe.id = employee.parent_id
+)
+select
+  name
+from
+  office_employees
+where
+  type = 3
+
+QUERY PLAN:
+"CTE Scan on office_employees  (cost=283.62..296.24 rows=3 width=32) (actual time=0.056..0.069 rows=3 loops=1)"
+"  Filter: (type = 3)"
+"  Rows Removed by Filter: 3"
+"  CTE office_employees"
+"    ->  Recursive Union  (cost=0.15..283.62 rows=561 width=44) (actual time=0.020..0.065 rows=6 loops=1)"
+"          ->  Index Scan using organization_structure_pkey on organization_structure parent
+                   (cost=0.15..8.17 rows=1 width=44) (actual time=0.019..0.019 rows=1 loops=1)"
+"                Index Cond: (id = 1)"
+"          ->  Hash Join  (cost=0.33..26.42 rows=56 width=44) (actual time=0.009..0.011 rows=2 loops=3)"
+"                Hash Cond: (employee.parent_id = oe.id)"
+"                ->  Seq Scan on organization_structure employee
+                         (cost=0.00..21.30 rows=1130 width=44) (actual time=0.003..0.004 rows=19 loops=3)"
+"                ->  Hash  (cost=0.20..0.20 rows=10 width=4) (actual time=0.002..0.002 rows=2 loops=3)"
+"                      Buckets: 1024  Batches: 1  Memory Usage: 9kB"
+"                      ->  WorkTable Scan on office_employees oe
+                               (cost=0.00..0.20 rows=10 width=4) (actual time=0.000..0.001 rows=2 loops=3)"
+"Planning Time: 0.142 ms"
+"Execution Time: 0.109 ms"
+
+На начальном шаге рекурсии используется индексное сканирование по primary key,
+На каждом шаге рекурсии происходит объединение данных с помощью Hash Join.
+
+Перспективы оптимизации:
+При увеличении объема данных сложность может вырасти.
+Здесь также поможет вышеописанный частичный индекс по столбцу type = 3 при помощи предиката,
+при конечной выборке из созданной таблицы CTE office_employees, индекс ускорит фильтрацию
+только по сотрудникам.
